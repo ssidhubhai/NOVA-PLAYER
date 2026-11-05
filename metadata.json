@@ -1,0 +1,6 @@
+{
+  "name": "NovaPlay - Minimal Video Player",
+  "description": "An ultra-clean, edge-to-edge minimalist video player with audio boost up to 200%, 2x hold speed, A-B looping, frame stepping, visual filters, subtitles, bookmarks, and snapshot capture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

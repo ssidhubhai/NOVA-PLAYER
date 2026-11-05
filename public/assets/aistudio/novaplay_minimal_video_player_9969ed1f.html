@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NovaPlay — Minimal Video Player</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; user-select: none; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #000000;
+      color: #f8fafc;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
+
+    /* Ultra-clean minimal timeline slider */
+    input[type="range"].seek-bar {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"].seek-bar::-webkit-slider-runnable-track {
+      height: 4px;
+      border-radius: 999px;
+    }
+    input[type="range"].seek-bar::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #ffffff;
+      margin-top: -4px;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+      opacity: 0;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .timeline-wrap:hover input[type="range"].seek-bar::-webkit-slider-thumb,
+    .vol-wrap:hover input[type="range"].seek-bar::-webkit-slider-thumb,
+    #studioToolsPanel input[type="range"].seek-bar::-webkit-slider-thumb {
+      opacity: 1;
+    }
+    input[type="range"].seek-bar:hover::-webkit-slider-thumb {
+      transform: scale(1.2);
+    }
+
+    /* Auto-hide cursor and floating controls */
+    #playerViewport.hide-cursor { cursor: none; }
+    #playerViewport.hide-cursor .player-overlay-ui {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+    }
+    .player-overlay-ui {
+      transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1), transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes pulsePop {
+      0% { transform: scale(0.88); opacity: 0; }
+      35% { transform: scale(1.02); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .hud-pop { animation: pulsePop 0.16s ease-out forwards; }
+
+    #customSubtitles {
+      text-shadow: 0 2px 8px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.95);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body class="w-screen h-screen bg-black text-white overflow-hidden select-none">
+
+  <!-- Full-Viewport Edge-to-Edge Cinema Stage -->
+  <main id="theaterSection" class="relative w-full h-full bg-black overflow-hidden">
+    <div id="playerViewport" tabindex="0" class="relative w-full h-full flex items-center justify-center bg-black overflow-hidden outline-none">
+
+      <!-- Hidden Canvas for optional ambient fallback when testing without a file -->
+      <canvas id="demoStreamCanvas" width="1280" height="720" class="hidden"></canvas>
+
+      <!-- Main Video Element -->
+      <div id="videoTransformWrapper" class="w-full h-full flex items-center justify-center transition-transform duration-150">
+        <video id="mainVideo" class="w-full h-full object-contain max-h-full" playsinline crossorigin="anonymous"></video>
+      </div>
+
+      <!-- Minimal Empty State Prompt (Automatically disappears as soon as you open or drop a video) -->
+      <div id="emptyStatePrompt" class="absolute inset-0 flex flex-col items-center justify-center z-10 pointer-events-none">
+        <label for="videoFileInput" class="pointer-events-auto group cursor-pointer flex flex-col items-center gap-3 px-8 py-7 rounded-3xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 hover:border-white/20 backdrop-blur-xl transition-all duration-200">
+          <div class="w-12 h-12 rounded-2xl bg-white/10 group-hover:bg-white/15 flex items-center justify-center text-white/90 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <div class="text-center">
+            <p class="text-sm font-medium text-white/90 tracking-tight">Open or Drop Video</p>
+            <p class="text-[11px] text-white/40 mt-0.5">MP4, MKV, WebM, MOV · Space/→ Hold for 2x</p>
+          </div>
+        </label>
+      </div>
+
+      <!-- Minimal Drag & Drop Overlay -->
+      <div id="dropZoneOverlay" class="hidden absolute inset-6 rounded-3xl border border-white/25 bg-black/80 backdrop-blur-xl z-50 flex flex-col items-center justify-center text-center p-6">
+        <p class="text-base font-medium text-white">Drop to Play</p>
+        <p class="text-xs text-white/50 mt-1">Video or .SRT / .VTT Subtitle</p>
+      </div>
+
+      <!-- Subtle Top Bar (Auto-Hides with Controls) -->
+      <header id="appHeader" class="player-overlay-ui absolute top-0 inset-x-0 px-6 pt-5 pb-8 bg-gradient-to-b from-black/70 via-black/20 to-transparent flex items-center justify-between gap-4 z-30">
+        <p id="nowPlayingTitle" class="text-xs font-medium text-white/75 truncate max-w-md"></p>
+
+        <div class="flex items-center gap-1.5 shrink-0">
+          <label for="videoFileInput" class="cursor-pointer px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white text-xs font-medium transition">
+            <span>Open Videos</span>
+          </label>
+          <input id="videoFileInput" type="file" accept="video/*,audio/*,.mkv,.mp4,.webm,.avi,.mov,.m4v,.ogg" multiple class="hidden" />
+
+          <label for="subtitleFileInput" class="cursor-pointer px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/15 backdrop-blur-md text-white/75 hover:text-white text-xs transition" title="Load .SRT or .VTT Subtitle">
+            <span>CC</span>
+            <span class="hidden">Load .SRT/.VTT</span>
+          </label>
+          <input id="subtitleFileInput" type="file" accept=".srt,.vtt" class="hidden" />
+
+          <button id="togglePlaylistBtn" type="button" class="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/15 backdrop-blur-md text-white/75 hover:text-white text-xs transition flex items-center gap-1" title="Playlist & Bookmarks (P)">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h10"/>
+            </svg>
+            <span class="hidden">Playlist</span>
+            <span id="playlistCountBadge" class="mono text-[10px] text-white/60">1</span>
+          </button>
+
+          <button id="openShortcutsBtn" type="button" class="after:content-['?'] w-7 h-7 rounded-full bg-white/5 hover:bg-white/15 backdrop-blur-md text-white/75 hover:text-white text-xs flex items-center justify-center transition" title="Keyboard Shortcuts (?)">
+            <span class="sr-only">Shortcuts</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Minimal 2x Long-Press Pill (Top Center, Only visible while holding) -->
+      <div id="longPressSpeedPill" class="hidden absolute top-6 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1 rounded-full bg-white/15 border border-white/20 backdrop-blur-xl text-white font-medium text-xs tracking-wide flex items-center gap-1.5 shadow-2xl">
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+        <span id="longPressSpeedText" class="mono text-[11px]">2.0x</span>
+      </div>
+
+      <!-- Minimal HUD Pill (Top Center/Left on Key Action, fades out in 1.1s) -->
+      <div id="hudToast" class="hidden absolute top-6 left-6 z-40 px-3 py-1 rounded-full bg-white/10 border border-white/15 backdrop-blur-xl text-white text-xs font-medium flex items-center gap-2">
+        <span id="hudIcon" class="text-white/80 hidden"></span>
+        <span id="hudText" class="mono text-[11px]">100%</span>
+      </div>
+
+      <!-- Minimal Center Flash Icon -->
+      <div id="centerFlashOverlay" class="hidden pointer-events-none absolute inset-0 flex items-center justify-center z-20">
+        <div class="w-14 h-14 rounded-full bg-black/50 border border-white/15 backdrop-blur-md flex flex-col items-center justify-center text-white hud-pop">
+          <div id="centerFlashIcon"></div>
+          <span id="centerFlashLabel" class="text-[10px] mono text-white/80 mt-0.5"></span>
+        </div>
+      </div>
+
+      <!-- Subtitle Overlay -->
+      <div id="customSubtitles" class="absolute bottom-20 left-8 right-8 text-center z-20 text-base md:text-lg font-medium text-white"></div>
+
+      <!-- Ultra-Minimal Bottom Floating Bar -->
+      <div id="controlsOverlay" class="player-overlay-ui absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent pt-10 pb-5 px-6 z-30 flex flex-col gap-2">
+
+        <!-- Sleek Hairline Scrubber -->
+        <div class="timeline-wrap relative flex items-center h-4 group">
+          <div class="w-full h-1 group-hover:h-1.5 transition-all bg-white/20 rounded-full overflow-hidden relative">
+            <div id="seekBufferedBar" class="absolute inset-y-0 left-0 bg-white/30 w-0"></div>
+            <div id="seekProgressBar" class="absolute inset-y-0 left-0 bg-white w-0"></div>
+            <div id="abLoopRegionBar" class="hidden absolute inset-y-0 bg-amber-400/60"></div>
+          </div>
+          <div id="timelineBookmarkDots" class="absolute inset-x-0 h-1 pointer-events-none"></div>
+          <input id="seekSlider" type="range" min="0" max="1000" value="0" step="1" class="seek-bar absolute inset-0 w-full h-full m-0" aria-label="Seek timeline" />
+        </div>
+
+        <!-- Single Clean Minimal Control Row -->
+        <div class="flex items-center justify-between gap-4 text-xs text-white/85">
+
+          <!-- Left: Play/Pause, Volume, Time -->
+          <div class="flex items-center gap-3">
+            <button id="playPauseBtn" type="button" class="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white transition" title="Play / Pause (Space)">
+              <svg id="playIconSvg" class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+              <svg id="pauseIconSvg" class="w-4 h-4 hidden" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+              </svg>
+            </button>
+
+            <!-- Minimal Volume Control (0% - 200% Boost) -->
+            <div class="vol-wrap flex items-center gap-2">
+              <button id="muteBtn" type="button" class="text-white/80 hover:text-white transition" title="Mute (M)">
+                <svg id="volHighIcon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/>
+                </svg>
+                <svg id="volMutedIcon" class="w-4 h-4 hidden text-rose-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zM17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/>
+                </svg>
+              </button>
+              <input id="volumeSlider" type="range" min="0" max="200" value="100" step="5" class="seek-bar w-16 sm:w-20 bg-white/20 rounded-full h-1" title="Volume & Boost up to 200% (↑/↓)" />
+              <span id="volumePercentText" class="mono text-[11px] text-white/60 w-8">100%</span>
+            </div>
+
+            <!-- Minimal Time Readout -->
+            <div class="flex items-center gap-1.5 mono text-[11px] text-white/70">
+              <span id="currentTimeLabel" class="text-white">00:00</span>
+              <span class="text-white/30">/</span>
+              <span id="durationTimeLabel">00:00</span>
+              <span id="remainingTimeLabel" class="hidden">(-00:00)</span>
+            </div>
+
+            <!-- Active Status Pills (Only shown when non-default) -->
+            <span id="abLoopBadge" class="hidden px-2 py-0.5 rounded-full bg-white/10 text-white/80 text-[10px] mono">Loop A-B Off</span>
+            <span id="audioBoostBadge" class="hidden px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] mono">Boost 100%</span>
+          </div>
+
+          <!-- Right: Speed, Studio Menu & Fullscreen -->
+          <div class="flex items-center gap-2">
+            <span id="activeSpeedBadge" class="hidden">1.00x</span>
+
+            <!-- Minimal Speed Selector -->
+            <select id="speedSelect" class="bg-white/10 hover:bg-white/15 rounded-full px-2.5 py-1 text-[11px] mono text-white outline-none cursor-pointer transition" title="Playback Speed ([ or ])">
+              <option value="0.25" class="bg-neutral-900 text-white">0.25x</option>
+              <option value="0.5" class="bg-neutral-900 text-white">0.5x</option>
+              <option value="0.75" class="bg-neutral-900 text-white">0.75x</option>
+              <option value="1" selected class="bg-neutral-900 text-white">1.0x</option>
+              <option value="1.25" class="bg-neutral-900 text-white">1.25x</option>
+              <option value="1.5" class="bg-neutral-900 text-white">1.5x</option>
+              <option value="1.75" class="bg-neutral-900 text-white">1.75x</option>
+              <option value="2" class="bg-neutral-900 text-white">2.0x</option>
+              <option value="2.5" class="bg-neutral-900 text-white">2.5x</option>
+              <option value="3" class="bg-neutral-900 text-white">3.0x</option>
+              <option value="4" class="bg-neutral-900 text-white">4.0x</option>
+            </select>
+
+            <!-- Studio & More Controls Popover Button -->
+            <button id="toggleToolsBtn" type="button" class="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white transition" title="More Controls & Video Settings (E)">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+              </svg>
+            </button>
+
+            <!-- Picture-in-Picture -->
+            <button id="pipBtn" type="button" class="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white transition" title="Picture-in-Picture (I)">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 12h6v5h-6z"/>
+              </svg>
+            </button>
+
+            <!-- Fullscreen -->
+            <button id="fullscreenBtn" type="button" class="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/80 hover:text-white transition" title="Fullscreen (F)">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Minimal Floating Popover Menu (Hidden by default; opened via icon or 'E') -->
+      <div id="studioToolsPanel" class="hidden absolute bottom-16 right-6 w-80 rounded-2xl bg-neutral-950/90 border border-white/15 backdrop-blur-2xl p-4 z-40 shadow-2xl text-xs">
+        <div class="flex items-center justify-between border-b border-white/10 pb-2.5 mb-3">
+          <span class="font-medium text-white">Playback & Video Tools</span>
+          <div class="flex items-center gap-2">
+            <button id="resetStudioBtn" type="button" class="text-[11px] text-white/60 hover:text-white">Reset All</button>
+            <button id="closeStudioBtn" type="button" class="text-white/60 hover:text-white px-1">✕</button>
+          </div>
+        </div>
+
+        <div class="space-y-3 max-h-[65vh] overflow-y-auto pr-1">
+          <!-- Transport & Frame / Loop Quick Actions tucked cleanly here -->
+          <div class="flex items-center justify-between gap-1 bg-white/5 p-2 rounded-xl">
+            <button id="prevTrackBtn" type="button" class="p-1.5 rounded hover:bg-white/10 text-white/80" title="Previous">⏮</button>
+            <button id="seekBackBtn" type="button" class="px-2 py-1 rounded hover:bg-white/10 text-white/80 mono text-[11px]"><span id="skipBackSecLabel">-5s</span></button>
+            <button id="frameBackBtn" type="button" class="px-2 py-1 rounded hover:bg-white/10 text-white/80 mono text-[11px]">-1F</button>
+            <button id="frameFwdBtn" type="button" class="px-2 py-1 rounded hover:bg-white/10 text-white/80 mono text-[11px]">+1F</button>
+            <button id="seekFwdBtn" type="button" class="px-2 py-1 rounded hover:bg-white/10 text-white/80 mono text-[11px]"><span id="skipFwdSecLabel">+5s</span></button>
+            <button id="nextTrackBtn" type="button" class="p-1.5 rounded hover:bg-white/10 text-white/80" title="Next">⏭</button>
+          </div>
+
+          <!-- Speed Step, Loop A-B, Bookmark & Snapshot -->
+          <div class="flex items-center justify-between gap-1.5 bg-white/5 p-2 rounded-xl">
+            <div class="flex items-center gap-1">
+              <button id="speedDownBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 mono">-</button>
+              <button id="speedUpBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 mono">+</button>
+            </div>
+            <div class="flex items-center gap-1">
+              <button id="setPointABtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 mono text-[11px]">A</button>
+              <button id="setPointBBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 mono text-[11px]">B</button>
+              <button id="clearLoopBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 mono text-[11px]">✕</button>
+            </div>
+            <div class="flex items-center gap-1">
+              <button id="addBookmarkBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-[11px]" title="Bookmark (D)">★</button>
+              <button id="snapshotBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-[11px]" title="Snapshot (S)">📷</button>
+            </div>
+          </div>
+
+          <!-- Long-Press Hold Speed & Skip Interval -->
+          <div class="grid grid-cols-2 gap-2 bg-white/5 p-2.5 rounded-xl">
+            <div>
+              <label for="holdSpeedConfig" class="block text-[10px] text-white/50 mb-1">Hold Speed (Space/→)</label>
+              <select id="holdSpeedConfig" class="w-full bg-black/60 border border-white/10 rounded-lg px-2 py-1 text-white mono text-[11px]">
+                <option value="1.5">1.5x Speed</option>
+                <option value="2" selected>2.0x Speed (Default)</option>
+                <option value="2.5">2.5x Speed</option>
+                <option value="3">3.0x Speed</option>
+                <option value="4">4.0x Speed</option>
+              </select>
+            </div>
+            <div>
+              <label for="skipStepConfig" class="block text-[10px] text-white/50 mb-1">Skip Step (←/→)</label>
+              <select id="skipStepConfig" class="w-full bg-black/60 border border-white/10 rounded-lg px-2 py-1 text-white mono text-[11px]">
+                <option value="2">2 Seconds</option>
+                <option value="5" selected>5 Seconds (Default)</option>
+                <option value="10">10 Seconds</option>
+                <option value="15">15 Seconds</option>
+                <option value="30">30 Seconds</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Aspect Fit & Rotate / Flip -->
+          <div class="bg-white/5 p-2.5 rounded-xl space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-white/60">Aspect Fit (Z)</span>
+              <div class="flex gap-1">
+                <button type="button" data-fit="contain" class="fit-mode-btn px-2 py-0.5 rounded bg-white text-black font-medium">Fit</button>
+                <button type="button" data-fit="cover" class="fit-mode-btn px-2 py-0.5 rounded bg-white/10 text-white/70">Crop</button>
+                <button type="button" data-fit="fill" class="fit-mode-btn px-2 py-0.5 rounded bg-white/10 text-white/70">Stretch</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-white/60">Transform</span>
+              <div class="flex gap-1.5">
+                <button id="rotateVideoBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-white mono text-[11px]">Rotate 90°</button>
+                <button id="flipHorizontalBtn" type="button" class="px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-white text-[11px]">Mirror Flip</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sliders: Zoom, Brightness, Contrast, Saturation -->
+          <div class="bg-white/5 p-2.5 rounded-xl space-y-2">
+            <div>
+              <div class="flex justify-between text-[10px] mb-0.5"><span class="text-white/50">Zoom</span><span id="zoomValText" class="mono text-white/80">100%</span></div>
+              <input id="zoomSlider" type="range" min="50" max="250" value="100" step="5" class="seek-bar w-full bg-white/20 rounded-full h-1" />
+            </div>
+            <div>
+              <div class="flex justify-between text-[10px] mb-0.5"><span class="text-white/50">Brightness</span><span id="brightnessValText" class="mono text-white/80">100%</span></div>
+              <input id="brightnessSlider" type="range" min="40" max="200" value="100" step="5" class="seek-bar w-full bg-white/20 rounded-full h-1" />
+            </div>
+            <div>
+              <div class="flex justify-between text-[10px] mb-0.5"><span class="text-white/50">Contrast</span><span id="contrastValText" class="mono text-white/80">100%</span></div>
+              <input id="contrastSlider" type="range" min="40" max="200" value="100" step="5" class="seek-bar w-full bg-white/20 rounded-full h-1" />
+            </div>
+            <div>
+              <div class="flex justify-between text-[10px] mb-0.5"><span class="text-white/50">Saturation</span><span id="saturationValText" class="mono text-white/80">100%</span></div>
+              <input id="saturationSlider" type="range" min="0" max="250" value="100" step="5" class="seek-bar w-full bg-white/20 rounded-full h-1" />
+            </div>
+          </div>
+
+          <!-- Subtitle Offset -->
+          <div class="bg-white/5 p-2.5 rounded-xl flex items-center justify-between">
+            <span class="text-white/60">Subtitle Sync</span>
+            <div class="flex items-center gap-1.5 mono">
+              <button id="subDelayMinusBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 hover:bg-white/15">-0.5s</button>
+              <span id="subDelayLabel" class="text-white/90 w-10 text-center">0.0s</span>
+              <button id="subDelayPlusBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 hover:bg-white/15">+0.5s</button>
+            </div>
+          </div>
+          <span id="statusFooterText" class="hidden">Ready</span>
+        </div>
+      </div>
+
+      <!-- Hidden Floating Playlist & Bookmarks Drawer (Toggled only when pressing 'P' or top-right icon) -->
+      <aside id="playlistSidebar" class="hidden absolute top-14 right-6 bottom-20 w-80 rounded-2xl bg-neutral-950/90 border border-white/15 backdrop-blur-2xl flex flex-col z-40 overflow-hidden shadow-2xl">
+        <div class="flex border-b border-white/10 text-[11px] font-medium">
+          <button id="tabQueueBtn" type="button" class="flex-1 py-2.5 text-center border-b-2 border-white text-white">Videos Queue</button>
+          <button id="tabBookmarksBtn" type="button" class="flex-1 py-2.5 text-center border-b-2 border-transparent text-white/50 hover:text-white">Bookmarks (<span id="bookmarkCountText">0</span>)</button>
+          <button id="tabSnapshotsBtn" type="button" class="flex-1 py-2.5 text-center border-b-2 border-transparent text-white/50 hover:text-white">Snapshots (<span id="snapshotCountText">0</span>)</button>
+        </div>
+
+        <div id="panelQueue" class="flex-1 flex flex-col overflow-hidden p-3 gap-2">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-white/50">Playlist</span>
+            <div class="flex gap-1.5">
+              <button id="loopPlaylistBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 text-white/80">Loop: All</button>
+              <button id="clearPlaylistBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 text-white/60 hover:text-rose-300">Clear</button>
+            </div>
+          </div>
+          <div id="playlistItemsContainer" class="flex-1 overflow-y-auto space-y-1 pr-1"></div>
+        </div>
+
+        <div id="panelBookmarks" class="hidden flex-1 flex-col overflow-hidden p-3 gap-2">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-white/50">Timestamps</span>
+            <button id="addBookmarkSidebarBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 text-white">+ Mark Now (D)</button>
+          </div>
+          <div id="bookmarksListContainer" class="flex-1 overflow-y-auto space-y-1 pr-1 text-xs"></div>
+        </div>
+
+        <div id="panelSnapshots" class="hidden flex-1 flex-col overflow-hidden p-3 gap-2">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="text-white/50">Captured Frames</span>
+            <button id="takeSnapshotSidebarBtn" type="button" class="px-2 py-0.5 rounded bg-white/10 text-white">Capture (S)</button>
+          </div>
+          <div id="snapshotsListContainer" class="flex-1 overflow-y-auto grid grid-cols-2 gap-2 pr-1"></div>
+        </div>
+      </aside>
+
+    </div>
+  </main>
+
+  <!-- Minimal Keyboard Shortcuts Modal (Only shown when pressing '?' button) -->
+  <div id="shortcutsModal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="w-full max-w-lg rounded-2xl bg-neutral-950 border border-white/15 p-5 shadow-2xl text-xs">
+      <div class="flex items-center justify-between pb-3 mb-3 border-b border-white/10">
+        <span class="font-medium text-sm text-white">Keyboard Shortcuts</span>
+        <button id="closeShortcutsBtn" type="button" class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white/80 flex items-center justify-center">✕</button>
+      </div>
+      <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-white/80">
+        <div class="flex justify-between"><span>Play / Pause</span><kbd class="mono text-white/50">Space / K</kbd></div>
+        <div class="flex justify-between"><span class="text-white font-medium">2x Speed Hold</span><kbd class="mono text-white">Hold Space / →</kbd></div>
+        <div class="flex justify-between"><span>Seek Back / Fwd</span><kbd class="mono text-white/50">← / → (or J / L)</kbd></div>
+        <div class="flex justify-between"><span>Volume (0–200%)</span><kbd class="mono text-white/50">↑ / ↓ / Scroll</kbd></div>
+        <div class="flex justify-between"><span>Speed Down / Up</span><kbd class="mono text-white/50">[ / ]</kbd></div>
+        <div class="flex justify-between"><span>Frame Step</span><kbd class="mono text-white/50">, / .</kbd></div>
+        <div class="flex justify-between"><span>Loop A / B / Clear</span><kbd class="mono text-white/50">A / B / U</kbd></div>
+        <div class="flex justify-between"><span>Fullscreen / PiP</span><kbd class="mono text-white/50">F / I</kbd></div>
+        <div class="flex justify-between"><span>Snapshot / Bookmark</span><kbd class="mono text-white/50">S / D</kbd></div>
+        <div class="flex justify-between"><span>Rotate / Flip / Fit</span><kbd class="mono text-white/50">R / H / Z</kbd></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const video = document.getElementById('mainVideo');
+      const videoTransformWrapper = document.getElementById('videoTransformWrapper');
+      const playerViewport = document.getElementById('playerViewport');
+      const demoCanvas = document.getElementById('demoStreamCanvas');
+      const emptyStatePrompt = document.getElementById('emptyStatePrompt');
+      const nowPlayingTitle = document.getElementById('nowPlayingTitle');
+      const statusFooterText = document.getElementById('statusFooterText');
+
+      const videoFileInput = document.getElementById('videoFileInput');
+      const subtitleFileInput = document.getElementById('subtitleFileInput');
+      const togglePlaylistBtn = document.getElementById('togglePlaylistBtn');
+      const playlistSidebar = document.getElementById('playlistSidebar');
+      const playlistCountBadge = document.getElementById('playlistCountBadge');
+      const openShortcutsBtn = document.getElementById('openShortcutsBtn');
+      const closeShortcutsBtn = document.getElementById('closeShortcutsBtn');
+      const shortcutsModal = document.getElementById('shortcutsModal');
+      const dropZoneOverlay = document.getElementById('dropZoneOverlay');
+
+      const playPauseBtn = document.getElementById('playPauseBtn');
+      const playIconSvg = document.getElementById('playIconSvg');
+      const pauseIconSvg = document.getElementById('pauseIconSvg');
+      const prevTrackBtn = document.getElementById('prevTrackBtn');
+      const nextTrackBtn = document.getElementById('nextTrackBtn');
+      const seekBackBtn = document.getElementById('seekBackBtn');
+      const seekFwdBtn = document.getElementById('seekFwdBtn');
+      const skipBackSecLabel = document.getElementById('skipBackSecLabel');
+      const skipFwdSecLabel = document.getElementById('skipFwdSecLabel');
+      const frameBackBtn = document.getElementById('frameBackBtn');
+      const frameFwdBtn = document.getElementById('frameFwdBtn');
+
+      const seekSlider = document.getElementById('seekSlider');
+      const seekProgressBar = document.getElementById('seekProgressBar');
+      const seekBufferedBar = document.getElementById('seekBufferedBar');
+      const abLoopRegionBar = document.getElementById('abLoopRegionBar');
+      const timelineBookmarkDots = document.getElementById('timelineBookmarkDots');
+      const currentTimeLabel = document.getElementById('currentTimeLabel');
+      const durationTimeLabel = document.getElementById('durationTimeLabel');
+      const remainingTimeLabel = document.getElementById('remainingTimeLabel');
+
+      const muteBtn = document.getElementById('muteBtn');
+      const volHighIcon = document.getElementById('volHighIcon');
+      const volMutedIcon = document.getElementById('volMutedIcon');
+      const volumeSlider = document.getElementById('volumeSlider');
+      const volumePercentText = document.getElementById('volumePercentText');
+      const audioBoostBadge = document.getElementById('audioBoostBadge');
+
+      const speedDownBtn = document.getElementById('speedDownBtn');
+      const speedUpBtn = document.getElementById('speedUpBtn');
+      const speedSelect = document.getElementById('speedSelect');
+      const activeSpeedBadge = document.getElementById('activeSpeedBadge');
+      const longPressSpeedPill = document.getElementById('longPressSpeedPill');
+      const longPressSpeedText = document.getElementById('longPressSpeedText');
+
+      const setPointABtn = document.getElementById('setPointABtn');
+      const setPointBBtn = document.getElementById('setPointBBtn');
+      const clearLoopBtn = document.getElementById('clearLoopBtn');
+      const abLoopBadge = document.getElementById('abLoopBadge');
+
+      const addBookmarkBtn = document.getElementById('addBookmarkBtn');
+      const addBookmarkSidebarBtn = document.getElementById('addBookmarkSidebarBtn');
+      const snapshotBtn = document.getElementById('snapshotBtn');
+      const takeSnapshotSidebarBtn = document.getElementById('takeSnapshotSidebarBtn');
+      const toggleToolsBtn = document.getElementById('toggleToolsBtn');
+      const studioToolsPanel = document.getElementById('studioToolsPanel');
+      const closeStudioBtn = document.getElementById('closeStudioBtn');
+      const resetStudioBtn = document.getElementById('resetStudioBtn');
+      const pipBtn = document.getElementById('pipBtn');
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+      const holdSpeedConfig = document.getElementById('holdSpeedConfig');
+      const skipStepConfig = document.getElementById('skipStepConfig');
+      const fitModeBtns = document.querySelectorAll('.fit-mode-btn');
+      const rotateVideoBtn = document.getElementById('rotateVideoBtn');
+      const flipHorizontalBtn = document.getElementById('flipHorizontalBtn');
+      const zoomSlider = document.getElementById('zoomSlider');
+      const brightnessSlider = document.getElementById('brightnessSlider');
+      const contrastSlider = document.getElementById('contrastSlider');
+      const saturationSlider = document.getElementById('saturationSlider');
+      const zoomValText = document.getElementById('zoomValText');
+      const brightnessValText = document.getElementById('brightnessValText');
+      const contrastValText = document.getElementById('contrastValText');
+      const saturationValText = document.getElementById('saturationValText');
+      const subDelayMinusBtn = document.getElementById('subDelayMinusBtn');
+      const subDelayPlusBtn = document.getElementById('subDelayPlusBtn');
+      const subDelayLabel = document.getElementById('subDelayLabel');
+
+      const hudToast = document.getElementById('hudToast');
+      const hudIcon = document.getElementById('hudIcon');
+      const hudText = document.getElementById('hudText');
+      const centerFlashOverlay = document.getElementById('centerFlashOverlay');
+      const centerFlashIcon = document.getElementById('centerFlashIcon');
+      const centerFlashLabel = document.getElementById('centerFlashLabel');
+      const customSubtitles = document.getElementById('customSubtitles');
+
+      const tabQueueBtn = document.getElementById('tabQueueBtn');
+      const tabBookmarksBtn = document.getElementById('tabBookmarksBtn');
+      const tabSnapshotsBtn = document.getElementById('tabSnapshotsBtn');
+      const panelQueue = document.getElementById('panelQueue');
+      const panelBookmarks = document.getElementById('panelBookmarks');
+      const panelSnapshots = document.getElementById('panelSnapshots');
+      const playlistItemsContainer = document.getElementById('playlistItemsContainer');
+      const bookmarksListContainer = document.getElementById('bookmarksListContainer');
+      const snapshotsListContainer = document.getElementById('snapshotsListContainer');
+      const bookmarkCountText = document.getElementById('bookmarkCountText');
+      const snapshotCountText = document.getElementById('snapshotCountText');
+      const loopPlaylistBtn = document.getElementById('loopPlaylistBtn');
+      const clearPlaylistBtn = document.getElementById('clearPlaylistBtn');
+
+      const state = {
+        playlist: [],
+        currentIndex: -1,
+        loopMode: 'all',
+        normalSpeed: 1.0,
+        holdSpeedMultiplier: 2.0,
+        isHoldSpeedActive: false,
+        skipStepSeconds: 5,
+        volumePercent: 100,
+        isMuted: false,
+        pointA: null,
+        pointB: null,
+        rotation: 0,
+        flipH: false,
+        fitMode: 'contain',
+        zoom: 100,
+        brightness: 100,
+        contrast: 100,
+        saturation: 100,
+        subtitles: [],
+        subtitleOffset: 0.0,
+        bookmarks: [],
+        snapshots: [],
+        demoDuration: 60,
+        demoCurrentTime: 0,
+        isDemoMode: true
+      };
+
+      let audioCtx = null;
+      let gainNode = null;
+      let mediaSourceConnected = false;
+
+      function ensureAudioBoostGraph() {
+        if (mediaSourceConnected) return;
+        try {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextClass) return;
+          audioCtx = new AudioContextClass();
+          const source = audioCtx.createMediaElementSource(video);
+          gainNode = audioCtx.createGain();
+          source.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          mediaSourceConnected = true;
+        } catch (err) {}
+      }
+
+      function formatTime(sec) {
+        if (!Number.isFinite(sec) || sec < 0) sec = 0;
+        const total = Math.floor(sec);
+        const hrs = Math.floor(total / 3600);
+        const mins = Math.floor((total % 3600) / 60);
+        const secs = total % 60;
+        if (hrs > 0) {
+          return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      }
+
+      let hudTimer = null;
+      function showHud(label) {
+        hudText.textContent = label;
+        hudToast.classList.remove('hidden');
+        statusFooterText.textContent = label;
+        if (hudTimer) clearTimeout(hudTimer);
+        hudTimer = setTimeout(() => {
+          hudToast.classList.add('hidden');
+        }, 1100);
+      }
+
+      let flashTimer = null;
+      function triggerCenterFlash(svgHtml, labelText = '') {
+        centerFlashIcon.innerHTML = svgHtml;
+        centerFlashLabel.textContent = labelText;
+        centerFlashOverlay.classList.remove('hidden');
+        if (flashTimer) clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => {
+          centerFlashOverlay.classList.add('hidden');
+        }, 450);
+      }
+
+      // Ultra-minimal dark ambient canvas when no local video is open yet
+      const demoCtx = demoCanvas.getContext('2d');
+      let lastDemoFrameTime = performance.now();
+
+      function renderDemoLoop(now) {
+        const dt = (now - lastDemoFrameTime) / 1000;
+        lastDemoFrameTime = now;
+
+        if (state.isDemoMode) {
+          const effectiveSpeed = state.isHoldSpeedActive ? state.holdSpeedMultiplier : state.normalSpeed;
+          if (!video.paused) {
+            state.demoCurrentTime += dt * effectiveSpeed;
+            if (state.pointA !== null && state.pointB !== null && state.demoCurrentTime >= state.pointB) {
+              state.demoCurrentTime = state.pointA;
+            } else if (state.demoCurrentTime >= state.demoDuration) {
+              state.demoCurrentTime = 0;
+            }
+          }
+          demoCtx.fillStyle = '#050507';
+          demoCtx.fillRect(0, 0, 1280, 720);
+          updateTimelineUI();
+        }
+        requestAnimationFrame(renderDemoLoop);
+      }
+
+      function initDemoStream() {
+        state.playlist = []; /* id: 'demo-stream' */
+        state.currentIndex = -1;
+        state.isDemoMode = true;
+        emptyStatePrompt.classList.remove('hidden');
+        nowPlayingTitle.textContent = '';
+
+        if (demoCanvas.captureStream) {
+          const stream = demoCanvas.captureStream(30);
+          video.srcObject = stream;
+          video.pause();
+        }
+        renderPlaylist();
+        requestAnimationFrame(renderDemoLoop);
+      }
+
+      function getCurrentTime() {
+        return state.isDemoMode ? state.demoCurrentTime : (video.currentTime || 0);
+      }
+      function getDuration() {
+        return state.isDemoMode ? state.demoDuration : (Number.isFinite(video.duration) ? video.duration : 0);
+      }
+      function setCurrentTime(targetSec) {
+        const dur = getDuration();
+        const clamped = Math.max(0, Math.min(dur || 0, targetSec));
+        if (state.isDemoMode) {
+          state.demoCurrentTime = clamped;
+        } else {
+          video.currentTime = clamped;
+        }
+        updateTimelineUI();
+      }
+
+      function togglePlayPause() {
+        ensureAudioBoostGraph();
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+        if (video.paused) {
+          video.play().catch(() => {});
+          triggerCenterFlash(
+            `<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`
+          );
+        } else {
+          video.pause();
+          triggerCenterFlash(
+            `<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`
+          );
+        }
+        syncPlayPauseIcons();
+      }
+
+      function syncPlayPauseIcons() {
+        const paused = video.paused;
+        playIconSvg.classList.toggle('hidden', !paused);
+        pauseIconSvg.classList.toggle('hidden', paused);
+      }
+
+      video.addEventListener('play', syncPlayPauseIcons);
+      video.addEventListener('pause', syncPlayPauseIcons);
+
+      function seekRelative(deltaSeconds) {
+        const nextTime = getCurrentTime() + deltaSeconds;
+        setCurrentTime(nextTime);
+        const sign = deltaSeconds > 0 ? '+' : '';
+        showHud(`${sign}${deltaSeconds}s`);
+      }
+
+      function stepFrame(direction) {
+        if (!video.paused) video.pause();
+        setCurrentTime(getCurrentTime() + direction * (1 / 30));
+        showHud(`Frame ${direction > 0 ? '+1' : '-1'}`);
+      }
+
+      function setNormalSpeed(newSpeed) {
+        const clamped = Math.max(0.25, Math.min(4.0, Math.round(newSpeed * 100) / 100));
+        state.normalSpeed = clamped;
+        if (!state.isHoldSpeedActive) {
+          video.playbackRate = clamped;
+        }
+        activeSpeedBadge.textContent = `${clamped.toFixed(2)}x`;
+        const opt = Array.from(speedSelect.options).find(o => Math.abs(parseFloat(o.value) - clamped) < 0.01);
+        if (opt) speedSelect.value = opt.value;
+        showHud(`${clamped.toFixed(2)}x`);
+      }
+
+      function startHoldSpeed() {
+        if (state.isHoldSpeedActive) return;
+        state.isHoldSpeedActive = true;
+        if (video.paused) {
+          video.play().catch(() => {});
+        }
+        video.playbackRate = state.holdSpeedMultiplier;
+        longPressSpeedText.textContent = `${state.holdSpeedMultiplier.toFixed(1)}x`;
+        longPressSpeedPill.classList.remove('hidden');
+      }
+
+      function stopHoldSpeed() {
+        if (!state.isHoldSpeedActive) return;
+        state.isHoldSpeedActive = false;
+        video.playbackRate = state.normalSpeed;
+        longPressSpeedPill.classList.add('hidden');
+      }
+
+      function setVolumePercent(newPercent) {
+        ensureAudioBoostGraph();
+        const clamped = Math.max(0, Math.min(200, Math.round(newPercent)));
+        state.volumePercent = clamped;
+        state.isMuted = clamped === 0;
+        volumeSlider.value = String(clamped);
+        volumePercentText.textContent = `${clamped}%`;
+
+        if (clamped <= 100) {
+          video.muted = state.isMuted;
+          video.volume = clamped / 100;
+          if (gainNode) gainNode.gain.value = 1.0;
+          audioBoostBadge.classList.add('hidden');
+        } else {
+          video.muted = false;
+          video.volume = 1.0;
+          if (gainNode) gainNode.gain.value = clamped / 100;
+          audioBoostBadge.textContent = `Boost ${clamped}%`;
+          audioBoostBadge.classList.remove('hidden');
+        }
+
+        volHighIcon.classList.toggle('hidden', state.isMuted);
+        volMutedIcon.classList.toggle('hidden', !state.isMuted);
+        showHud(state.isMuted ? 'Muted' : `Volume ${clamped}%`);
+      }
+
+      function toggleMute() {
+        if (state.isMuted || state.volumePercent === 0) {
+          const restore = state.volumePercent === 0 ? 100 : state.volumePercent;
+          state.isMuted = false;
+          setVolumePercent(restore);
+        } else {
+          state.isMuted = true;
+          video.muted = true;
+          volHighIcon.classList.add('hidden');
+          volMutedIcon.classList.remove('hidden');
+          volumePercentText.textContent = 'Mute';
+          showHud('Muted');
+        }
+      }
+
+      function updateTimelineUI() {
+        const cur = getCurrentTime();
+        const dur = getDuration();
+        currentTimeLabel.textContent = formatTime(cur);
+        durationTimeLabel.textContent = formatTime(dur);
+        remainingTimeLabel.textContent = `(-${formatTime(Math.max(0, dur - cur))})`;
+
+        if (dur > 0) {
+          const pct = Math.min(100, Math.max(0, (cur / dur) * 100));
+          seekProgressBar.style.width = `${pct}%`;
+          seekSlider.value = String(Math.round((pct / 100) * 1000));
+        } else {
+          seekProgressBar.style.width = '0%';
+          seekSlider.value = '0';
+        }
+
+        if (!state.isDemoMode && state.pointA !== null && state.pointB !== null && cur >= state.pointB) {
+          video.currentTime = state.pointA;
+        }
+
+        if (state.subtitles.length > 0) {
+          const adjustedTime = cur - state.subtitleOffset;
+          const activeCue = state.subtitles.find(c => adjustedTime >= c.start && adjustedTime <= c.end);
+          customSubtitles.innerHTML = activeCue ? `<span class="px-2.5 py-0.5 rounded bg-black/70">${activeCue.text}</span>` : '';
+        } else {
+          customSubtitles.innerHTML = '';
+        }
+      }
+
+      video.addEventListener('timeupdate', updateTimelineUI);
+      video.addEventListener('loadedmetadata', () => {
+        updateTimelineUI();
+        renderBookmarkDots();
+      });
+      video.addEventListener('progress', () => {
+        try {
+          if (video.buffered.length > 0 && video.duration > 0) {
+            const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+            const pct = Math.min(100, (bufferedEnd / video.duration) * 100);
+            seekBufferedBar.style.width = `${pct}%`;
+          }
+        } catch (e) {}
+      });
+      video.addEventListener('ended', () => {
+        if (state.loopMode === 'one') {
+          setCurrentTime(0);
+          video.play().catch(() => {});
+        } else if (state.playlist.length > 1) {
+          const nextIdx = state.currentIndex + 1;
+          if (nextIdx < state.playlist.length) {
+            loadPlaylistTrack(nextIdx);
+          } else if (state.loopMode === 'all') {
+            loadPlaylistTrack(0);
+          }
+        } else if (state.loopMode === 'all') {
+          setCurrentTime(0);
+          video.play().catch(() => {});
+        }
+      });
+
+      function addVideoFilesToPlaylist(fileList) {
+        const files = Array.from(fileList).filter(f =>
+          f.type.startsWith('video/') ||
+          f.type.startsWith('audio/') ||
+          /\.(mp4|mkv|webm|mov|avi|m4v|ogg)$/i.test(f.name)
+        );
+        if (files.length === 0) return;
+
+        const startIndex = state.playlist.length;
+        files.forEach((file, i) => {
+          const url = URL.createObjectURL(file);
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
+          state.playlist.push({
+            id: 'local-' + Date.now() + '-' + i,
+            name: file.name,
+            url: url,
+            sizeText: sizeMB,
+            isDemo: false
+          });
+        });
+
+        renderPlaylist();
+        loadPlaylistTrack(startIndex);
+      }
+
+      function loadPlaylistTrack(index) {
+        if (index < 0 || index >= state.playlist.length) return;
+        const item = state.playlist[index];
+        state.currentIndex = index;
+        clearABLoop(false);
+
+        state.isDemoMode = false;
+        emptyStatePrompt.classList.add('hidden');
+        video.srcObject = null;
+        video.src = item.url;
+        video.playbackRate = state.normalSpeed;
+        nowPlayingTitle.textContent = item.name;
+        video.play().catch(() => {});
+        renderPlaylist();
+      }
+
+      function renderPlaylist() {
+        playlistCountBadge.textContent = String(state.playlist.length);
+        playlistItemsContainer.innerHTML = '';
+
+        if (state.playlist.length === 0) {
+          playlistItemsContainer.innerHTML = `<p class="text-white/40 text-xs text-center py-6">No videos queued</p>`;
+          return;
+        }
+
+        state.playlist.forEach((item, idx) => {
+          const isCurrent = idx === state.currentIndex;
+          const row = document.createElement('div');
+          row.className = `flex items-center justify-between gap-2 p-2 rounded-xl cursor-pointer transition ${
+            isCurrent ? 'bg-white/15 text-white' : 'hover:bg-white/5 text-white/70'
+          }`;
+          row.innerHTML = `
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-medium truncate">${item.name}</p>
+              <p class="text-[10px] text-white/40 mono">${item.sizeText}</p>
+            </div>
+            <button type="button" data-remove-idx="${idx}" class="text-white/40 hover:text-rose-400 px-1 text-xs">✕</button>
+          `;
+          row.addEventListener('click', (e) => {
+            if (e.target.closest('[data-remove-idx]')) {
+              e.stopPropagation();
+              state.playlist.splice(idx, 1);
+              if (state.playlist.length === 0) initDemoStream();
+              else renderPlaylist();
+              return;
+            }
+            loadPlaylistTrack(idx);
+          });
+          playlistItemsContainer.appendChild(row);
+        });
+      }
+
+      function setLoopPointA() {
+        state.pointA = getCurrentTime();
+        if (state.pointB !== null && state.pointB <= state.pointA) state.pointB = null;
+        updateABLoopUI();
+        showHud(`Loop A: ${formatTime(state.pointA)}`);
+      }
+
+      function setLoopPointB() {
+        const cur = getCurrentTime();
+        if (state.pointA === null) state.pointA = Math.max(0, cur - 5);
+        if (cur > state.pointA) {
+          state.pointB = cur;
+          updateABLoopUI();
+          showHud(`Loop ${formatTime(state.pointA)}–${formatTime(state.pointB)}`);
+        }
+      }
+
+      function clearABLoop(notify = true) {
+        state.pointA = null;
+        state.pointB = null;
+        updateABLoopUI();
+        if (notify) showHud('Loop Off');
+      }
+
+      function updateABLoopUI() {
+        const dur = getDuration();
+        if (state.pointA !== null && state.pointB !== null && dur > 0) {
+          abLoopRegionBar.style.left = `${(state.pointA / dur) * 100}%`;
+          abLoopRegionBar.style.width = `${((state.pointB - state.pointA) / dur) * 100}%`;
+          abLoopRegionBar.classList.remove('hidden');
+          abLoopBadge.textContent = `A–B ${formatTime(state.pointA)}–${formatTime(state.pointB)}`;
+          abLoopBadge.classList.remove('hidden');
+        } else if (state.pointA !== null) {
+          abLoopRegionBar.classList.add('hidden');
+          abLoopBadge.textContent = `A: ${formatTime(state.pointA)}`;
+          abLoopBadge.classList.remove('hidden');
+        } else {
+          abLoopRegionBar.classList.add('hidden');
+          abLoopBadge.classList.add('hidden');
+        }
+      }
+
+      function applyVideoTransformsAndFilters() {
+        video.style.objectFit = state.fitMode;
+        const scaleX = (state.zoom / 100) * (state.flipH ? -1 : 1);
+        const scaleY = state.zoom / 100;
+        videoTransformWrapper.style.transform = `rotate(${state.rotation}deg) scale(${scaleX}, ${scaleY})`;
+        video.style.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%) saturate(${state.saturation}%)`;
+
+        zoomValText.textContent = `${state.zoom}%`;
+        brightnessValText.textContent = `${state.brightness}%`;
+        contrastValText.textContent = `${state.contrast}%`;
+        saturationValText.textContent = `${state.saturation}%`;
+
+        fitModeBtns.forEach(btn => {
+          const active = btn.getAttribute('data-fit') === state.fitMode;
+          btn.className = `fit-mode-btn px-2 py-0.5 rounded font-medium ${
+            active ? 'bg-white text-black' : 'bg-white/10 text-white/70'
+          }`;
+        });
+      }
+
+      function parseSubtitlesFile(file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const raw = String(reader.result || '');
+          const cues = [];
+          const blocks = raw.replace(/\r\n/g, '\n').split(/\n\n+/);
+          const timeRegex = /(\d{1,2}:)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{1,2}:)?(\d{2}):(\d{2})[.,](\d{3})/;
+
+          blocks.forEach(block => {
+            const lines = block.trim().split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              const match = lines[i].match(timeRegex);
+              if (match) {
+                const start =
+                  (parseInt(match[1] || '0', 10) * 3600) +
+                  (parseInt(match[2], 10) * 60) +
+                  parseInt(match[3], 10) +
+                  parseInt(match[4], 10) / 1000;
+                const end =
+                  (parseInt(match[5] || '0', 10) * 3600) +
+                  (parseInt(match[6], 10) * 60) +
+                  parseInt(match[7], 10) +
+                  parseInt(match[8], 10) / 1000;
+                const text = lines.slice(i + 1).join('<br/>');
+                cues.push({ start, end, text });
+                break;
+              }
+            }
+          });
+          state.subtitles = cues;
+          showHud(`Subtitles Loaded (${cues.length})`);
+        };
+        reader.readAsText(file);
+      }
+
+      function addBookmark() {
+        const time = getCurrentTime();
+        state.bookmarks.push({
+          id: 'bm-' + Date.now(),
+          time,
+          label: `Mark ${formatTime(time)}`
+        });
+        state.bookmarks.sort((a, b) => a.time - b.time);
+        renderBookmarks();
+        renderBookmarkDots();
+        showHud(`Bookmarked ${formatTime(time)}`);
+      }
+
+      function renderBookmarks() {
+        bookmarkCountText.textContent = String(state.bookmarks.length);
+        bookmarksListContainer.innerHTML = '';
+        if (state.bookmarks.length === 0) {
+          bookmarksListContainer.innerHTML = `<p class="text-white/40 text-center py-6">Press D to bookmark</p>`;
+          return;
+        }
+        state.bookmarks.forEach((bm, idx) => {
+          const item = document.createElement('div');
+          item.className = 'flex items-center justify-between p-2 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer';
+          item.innerHTML = `
+            <span class="mono text-white/90">${formatTime(bm.time)}</span>
+            <button type="button" data-del-bm="${idx}" class="text-white/40 hover:text-rose-400 px-1">✕</button>
+          `;
+          item.addEventListener('click', (e) => {
+            if (e.target.closest('[data-del-bm]')) {
+              e.stopPropagation();
+              state.bookmarks.splice(idx, 1);
+              renderBookmarks();
+              renderBookmarkDots();
+              return;
+            }
+            setCurrentTime(bm.time);
+          });
+          bookmarksListContainer.appendChild(item);
+        });
+      }
+
+      function renderBookmarkDots() {
+        timelineBookmarkDots.innerHTML = '';
+        const dur = getDuration();
+        if (!dur) return;
+        state.bookmarks.forEach(bm => {
+          if (bm.time <= dur) {
+            const dot = document.createElement('div');
+            dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 absolute top-0';
+            dot.style.left = `${(bm.time / dur) * 100}%`;
+            timelineBookmarkDots.appendChild(dot);
+          }
+        });
+      }
+
+      function captureSnapshot() {
+        const snapCanvas = document.createElement('canvas');
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        snapCanvas.width = w;
+        snapCanvas.height = h;
+        const ctx = snapCanvas.getContext('2d');
+        ctx.drawImage(state.isDemoMode ? demoCanvas : video, 0, 0, w, h);
+        const dataUrl = snapCanvas.toDataURL('image/png');
+        const timeStr = formatTime(getCurrentTime());
+
+        state.snapshots.unshift({ id: 'snap-' + Date.now(), dataUrl, timeStr });
+        renderSnapshots();
+        showHud(`Snapshot ${timeStr}`);
+      }
+
+      function renderSnapshots() {
+        snapshotCountText.textContent = String(state.snapshots.length);
+        snapshotsListContainer.innerHTML = '';
+        if (state.snapshots.length === 0) {
+          snapshotsListContainer.innerHTML = `<p class="col-span-2 text-white/40 text-xs text-center py-6">Press S to capture</p>`;
+          return;
+        }
+        state.snapshots.forEach(snap => {
+          const card = document.createElement('div');
+          card.className = 'rounded-lg overflow-hidden bg-white/5 border border-white/10 flex flex-col';
+          card.innerHTML = `
+            <img src="${snap.dataUrl}" alt="Frame at ${snap.timeStr}" class="w-full h-16 object-cover" />
+            <div class="p-1.5 flex items-center justify-between text-[10px]">
+              <span class="mono text-white/70">${snap.timeStr}</span>
+              <a href="${snap.dataUrl}" download="frame-${snap.timeStr.replace(/:/g, '-')}.png" class="text-white hover:underline">Save</a>
+            </div>
+          `;
+          snapshotsListContainer.appendChild(card);
+        });
+      }
+
+      function switchSidebarTab(tabName) {
+        const isQueue = tabName === 'queue';
+        const isBookmarks = tabName === 'bookmarks';
+        const isSnapshots = tabName === 'snapshots';
+
+        panelQueue.classList.toggle('hidden', !isQueue);
+        panelQueue.classList.toggle('flex', isQueue);
+        panelBookmarks.classList.toggle('hidden', !isBookmarks);
+        panelBookmarks.classList.toggle('flex', isBookmarks);
+        panelSnapshots.classList.toggle('hidden', !isSnapshots);
+        panelSnapshots.classList.toggle('flex', isSnapshots);
+
+        tabQueueBtn.className = `flex-1 py-2.5 text-center border-b-2 ${isQueue ? 'border-white text-white' : 'border-transparent text-white/50'}`;
+        tabBookmarksBtn.className = `flex-1 py-2.5 text-center border-b-2 ${isBookmarks ? 'border-white text-white' : 'border-transparent text-white/50'}`;
+        tabSnapshotsBtn.className = `flex-1 py-2.5 text-center border-b-2 ${isSnapshots ? 'border-white text-white' : 'border-transparent text-white/50'}`;
+      }
+
+      tabQueueBtn.addEventListener('click', () => switchSidebarTab('queue'));
+      tabBookmarksBtn.addEventListener('click', () => switchSidebarTab('bookmarks'));
+      tabSnapshotsBtn.addEventListener('click', () => switchSidebarTab('snapshots'));
+
+      function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          playerViewport.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+
+      function togglePiP() {
+        if (document.pictureInPictureElement) {
+          document.exitPictureInPicture().catch(() => {});
+        } else if (video.requestPictureInPicture) {
+          video.requestPictureInPicture().catch(() => {});
+        }
+      }
+
+      playPauseBtn.addEventListener('click', togglePlayPause);
+      prevTrackBtn.addEventListener('click', () => {
+        if (state.currentIndex > 0) loadPlaylistTrack(state.currentIndex - 1);
+        else setCurrentTime(0);
+      });
+      nextTrackBtn.addEventListener('click', () => {
+        if (state.currentIndex + 1 < state.playlist.length) loadPlaylistTrack(state.currentIndex + 1);
+      });
+      seekBackBtn.addEventListener('click', () => seekRelative(-state.skipStepSeconds));
+      seekFwdBtn.addEventListener('click', () => seekRelative(state.skipStepSeconds));
+      frameBackBtn.addEventListener('click', () => stepFrame(-1));
+      frameFwdBtn.addEventListener('click', () => stepFrame(1));
+
+      seekSlider.addEventListener('input', () => {
+        const dur = getDuration();
+        setCurrentTime((parseFloat(seekSlider.value) / 1000) * dur);
+      });
+
+      muteBtn.addEventListener('click', toggleMute);
+      volumeSlider.addEventListener('input', () => setVolumePercent(parseFloat(volumeSlider.value)));
+
+      speedDownBtn.addEventListener('click', () => setNormalSpeed(state.normalSpeed - 0.25));
+      speedUpBtn.addEventListener('click', () => setNormalSpeed(state.normalSpeed + 0.25));
+      speedSelect.addEventListener('change', () => setNormalSpeed(parseFloat(speedSelect.value)));
+
+      setPointABtn.addEventListener('click', setLoopPointA);
+      setPointBBtn.addEventListener('click', setLoopPointB);
+      clearLoopBtn.addEventListener('click', () => clearABLoop(true));
+
+      addBookmarkBtn.addEventListener('click', addBookmark);
+      addBookmarkSidebarBtn.addEventListener('click', addBookmark);
+      snapshotBtn.addEventListener('click', captureSnapshot);
+      takeSnapshotSidebarBtn.addEventListener('click', captureSnapshot);
+
+      toggleToolsBtn.addEventListener('click', () => {
+        studioToolsPanel.classList.toggle('hidden');
+        playlistSidebar.classList.add('hidden');
+      });
+      closeStudioBtn.addEventListener('click', () => studioToolsPanel.classList.add('hidden'));
+      resetStudioBtn.addEventListener('click', () => {
+        state.rotation = 0;
+        state.flipH = false;
+        state.fitMode = 'contain';
+        state.zoom = 100;
+        state.brightness = 100;
+        state.contrast = 100;
+        state.saturation = 100;
+        state.subtitleOffset = 0;
+        zoomSlider.value = '100';
+        brightnessSlider.value = '100';
+        contrastSlider.value = '100';
+        saturationSlider.value = '100';
+        subDelayLabel.textContent = '0.0s';
+        applyVideoTransformsAndFilters();
+        showHud('Reset');
+      });
+
+      holdSpeedConfig.addEventListener('change', () => {
+        state.holdSpeedMultiplier = parseFloat(holdSpeedConfig.value);
+        showHud(`Hold: ${state.holdSpeedMultiplier.toFixed(1)}x`);
+      });
+
+      skipStepConfig.addEventListener('change', () => {
+        state.skipStepSeconds = parseInt(skipStepConfig.value, 10);
+        skipBackSecLabel.textContent = `-${state.skipStepSeconds}s`;
+        skipFwdSecLabel.textContent = `+${state.skipStepSeconds}s`;
+        showHud(`Skip: ${state.skipStepSeconds}s`);
+      });
+
+      fitModeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.fitMode = btn.getAttribute('data-fit');
+          applyVideoTransformsAndFilters();
+          showHud(`Fit: ${state.fitMode}`);
+        });
+      });
+
+      rotateVideoBtn.addEventListener('click', () => {
+        state.rotation = (state.rotation + 90) % 360;
+        applyVideoTransformsAndFilters();
+        showHud(`${state.rotation}°`);
+      });
+
+      flipHorizontalBtn.addEventListener('click', () => {
+        state.flipH = !state.flipH;
+        applyVideoTransformsAndFilters();
+        showHud(state.flipH ? 'Mirrored' : 'Normal');
+      });
+
+      zoomSlider.addEventListener('input', () => { state.zoom = parseInt(zoomSlider.value, 10); applyVideoTransformsAndFilters(); });
+      brightnessSlider.addEventListener('input', () => { state.brightness = parseInt(brightnessSlider.value, 10); applyVideoTransformsAndFilters(); });
+      contrastSlider.addEventListener('input', () => { state.contrast = parseInt(contrastSlider.value, 10); applyVideoTransformsAndFilters(); });
+      saturationSlider.addEventListener('input', () => { state.saturation = parseInt(saturationSlider.value, 10); applyVideoTransformsAndFilters(); });
+
+      subDelayMinusBtn.addEventListener('click', () => {
+        state.subtitleOffset -= 0.5;
+        subDelayLabel.textContent = `${state.subtitleOffset.toFixed(1)}s`;
+        showHud(`Sub ${state.subtitleOffset.toFixed(1)}s`);
+      });
+      subDelayPlusBtn.addEventListener('click', () => {
+        state.subtitleOffset += 0.5;
+        subDelayLabel.textContent = `${state.subtitleOffset.toFixed(1)}s`;
+        showHud(`Sub ${state.subtitleOffset.toFixed(1)}s`);
+      });
+
+      pipBtn.addEventListener('click', togglePiP);
+      fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+      togglePlaylistBtn.addEventListener('click', () => {
+        playlistSidebar.classList.toggle('hidden');
+        studioToolsPanel.classList.add('hidden');
+      });
+
+      openShortcutsBtn.addEventListener('click', () => shortcutsModal.classList.remove('hidden'));
+      closeShortcutsBtn.addEventListener('click', () => shortcutsModal.classList.add('hidden'));
+      shortcutsModal.addEventListener('click', (e) => {
+        if (e.target === shortcutsModal) shortcutsModal.classList.add('hidden');
+      });
+
+      videoFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) addVideoFilesToPlaylist(e.target.files);
+      });
+
+      subtitleFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) parseSubtitlesFile(e.target.files[0]);
+      });
+
+      loopPlaylistBtn.addEventListener('click', () => {
+        const modes = ['all', 'one', 'off'];
+        state.loopMode = modes[(modes.indexOf(state.loopMode) + 1) % modes.length];
+        loopPlaylistBtn.textContent = `Loop: ${state.loopMode.toUpperCase()}`;
+      });
+
+      clearPlaylistBtn.addEventListener('click', () => initDemoStream());
+
+      window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZoneOverlay.classList.remove('hidden');
+      });
+      window.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget === null) dropZoneOverlay.classList.add('hidden');
+      });
+      window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZoneOverlay.classList.add('hidden');
+        if (!e.dataTransfer || !e.dataTransfer.files) return;
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        const subFile = droppedFiles.find(f => /\.(srt|vtt)$/i.test(f.name));
+        if (subFile) parseSubtitlesFile(subFile);
+        addVideoFilesToPlaylist(droppedFiles);
+      });
+
+      let pointerHoldTimer = null;
+      let pointerHeldActivated = false;
+
+      playerViewport.addEventListener('pointerdown', (e) => {
+        if (
+          e.target.closest('#controlsOverlay') ||
+          e.target.closest('#studioToolsPanel') ||
+          e.target.closest('#playlistSidebar') ||
+          e.target.closest('#appHeader') ||
+          e.target.closest('#emptyStatePrompt')
+        ) return;
+        if (e.button !== 0) return;
+        pointerHeldActivated = false;
+        pointerHoldTimer = setTimeout(() => {
+          pointerHeldActivated = true;
+          startHoldSpeed();
+        }, 260);
+      });
+
+      window.addEventListener('pointerup', () => {
+        if (pointerHoldTimer) {
+          clearTimeout(pointerHoldTimer);
+          pointerHoldTimer = null;
+        }
+        if (pointerHeldActivated) {
+          stopHoldSpeed();
+          setTimeout(() => { pointerHeldActivated = false; }, 50);
+        }
+      });
+
+      playerViewport.addEventListener('click', (e) => {
+        if (
+          e.target.closest('#controlsOverlay') ||
+          e.target.closest('#studioToolsPanel') ||
+          e.target.closest('#playlistSidebar') ||
+          e.target.closest('#appHeader') ||
+          e.target.closest('#emptyStatePrompt')
+        ) return;
+        if (pointerHeldActivated) return;
+        studioToolsPanel.classList.add('hidden');
+        playlistSidebar.classList.add('hidden');
+        togglePlayPause();
+      });
+
+      playerViewport.addEventListener('dblclick', (e) => {
+        if (
+          e.target.closest('#controlsOverlay') ||
+          e.target.closest('#studioToolsPanel') ||
+          e.target.closest('#playlistSidebar') ||
+          e.target.closest('#appHeader')
+        ) return;
+        toggleFullscreen();
+      });
+
+      playerViewport.addEventListener('wheel', (e) => {
+        if (e.target.closest('#studioToolsPanel') || e.target.closest('#playlistSidebar')) return;
+        e.preventDefault();
+        setVolumePercent(state.volumePercent + (e.deltaY < 0 ? 5 : -5));
+      }, { passive: false });
+
+      let idleMouseTimer = null;
+      playerViewport.addEventListener('mousemove', () => {
+        playerViewport.classList.remove('hide-cursor');
+        if (idleMouseTimer) clearTimeout(idleMouseTimer);
+        idleMouseTimer = setTimeout(() => {
+          if (!video.paused && studioToolsPanel.classList.contains('hidden') && playlistSidebar.classList.contains('hidden')) {
+            playerViewport.classList.add('hide-cursor');
+          }
+        }, 2000);
+      });
+
+      let spaceHoldTimer = null;
+      let spaceHoldActive = false;
+      let rightArrowHoldTimer = null;
+      let rightArrowHoldActive = false;
+
+      window.addEventListener('keydown', (e) => {
+        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+          if (e.code !== 'Space' && !e.code.startsWith('Arrow')) return;
+          e.target.blur();
+        }
+
+        if (e.code === 'Space') {
+          e.preventDefault();
+          if (e.repeat) {
+            if (!spaceHoldActive) {
+              spaceHoldActive = true;
+              if (spaceHoldTimer) clearTimeout(spaceHoldTimer);
+              startHoldSpeed();
+            }
+            return;
+          }
+          spaceHoldActive = false;
+          spaceHoldTimer = setTimeout(() => {
+            spaceHoldActive = true;
+            startHoldSpeed();
+          }, 220);
+          return;
+        }
+
+        if (e.code === 'ArrowRight') {
+          e.preventDefault();
+          if (e.repeat) {
+            if (!rightArrowHoldActive) {
+              rightArrowHoldActive = true;
+              if (rightArrowHoldTimer) clearTimeout(rightArrowHoldTimer);
+              startHoldSpeed();
+            }
+            return;
+          }
+          rightArrowHoldActive = false;
+          rightArrowHoldTimer = setTimeout(() => {
+            rightArrowHoldActive = true;
+            startHoldSpeed();
+          }, 220);
+          return;
+        }
+
+        switch (e.code) {
+          case 'KeyK': e.preventDefault(); togglePlayPause(); break;
+          case 'ArrowLeft': e.preventDefault(); seekRelative(-state.skipStepSeconds); break;
+          case 'KeyJ': e.preventDefault(); seekRelative(-10); break;
+          case 'KeyL': e.preventDefault(); seekRelative(10); break;
+          case 'ArrowUp': e.preventDefault(); setVolumePercent(state.volumePercent + 5); break;
+          case 'ArrowDown': e.preventDefault(); setVolumePercent(state.volumePercent - 5); break;
+          case 'KeyM': e.preventDefault(); toggleMute(); break;
+          case 'BracketLeft': e.preventDefault(); setNormalSpeed(state.normalSpeed - 0.25); break;
+          case 'BracketRight': e.preventDefault(); setNormalSpeed(state.normalSpeed + 0.25); break;
+          case 'Backslash': e.preventDefault(); setNormalSpeed(1.0); break;
+          case 'Comma':
+            e.preventDefault();
+            if (e.shiftKey) setNormalSpeed(state.normalSpeed - 0.25);
+            else stepFrame(-1);
+            break;
+          case 'Period':
+            e.preventDefault();
+            if (e.shiftKey) setNormalSpeed(state.normalSpeed + 0.25);
+            else stepFrame(1);
+            break;
+          case 'KeyF': e.preventDefault(); toggleFullscreen(); break;
+          case 'KeyI': e.preventDefault(); togglePiP(); break;
+          case 'KeyA': e.preventDefault(); setLoopPointA(); break;
+          case 'KeyB': e.preventDefault(); setLoopPointB(); break;
+          case 'KeyU': e.preventDefault(); clearABLoop(true); break;
+          case 'KeyS': e.preventDefault(); captureSnapshot(); break;
+          case 'KeyD': e.preventDefault(); addBookmark(); break;
+          case 'KeyR': e.preventDefault(); rotateVideoBtn.click(); break;
+          case 'KeyH': e.preventDefault(); flipHorizontalBtn.click(); break;
+          case 'KeyZ':
+            e.preventDefault();
+            {
+              const fits = ['contain', 'cover', 'fill'];
+              state.fitMode = fits[(fits.indexOf(state.fitMode) + 1) % fits.length];
+              applyVideoTransformsAndFilters();
+              showHud(`Fit: ${state.fitMode}`);
+            }
+            break;
+          case 'KeyP':
+            e.preventDefault();
+            if (e.shiftKey) prevTrackBtn.click();
+            else playlistSidebar.classList.toggle('hidden');
+            break;
+          case 'KeyN':
+            if (e.shiftKey) { e.preventDefault(); nextTrackBtn.click(); }
+            break;
+          case 'KeyE':
+            e.preventDefault();
+            studioToolsPanel.classList.toggle('hidden');
+            break;
+          case 'Slash':
+            if (e.shiftKey) { e.preventDefault(); shortcutsModal.classList.toggle('hidden'); }
+            break;
+          case 'Home': e.preventDefault(); setCurrentTime(0); break;
+          case 'End': e.preventDefault(); setCurrentTime(getDuration()); break;
+          default:
+            if (/^Digit[0-9]$/.test(e.code)) {
+              e.preventDefault();
+              const digit = parseInt(e.code.replace('Digit', ''), 10);
+              setCurrentTime((digit / 10) * getDuration());
+              showHud(`${digit * 10}%`);
+            }
+            break;
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          if (spaceHoldTimer) { clearTimeout(spaceHoldTimer); spaceHoldTimer = null; }
+          if (spaceHoldActive) { spaceHoldActive = false; stopHoldSpeed(); }
+          else togglePlayPause();
+        } else if (e.code === 'ArrowRight') {
+          e.preventDefault();
+          if (rightArrowHoldTimer) { clearTimeout(rightArrowHoldTimer); rightArrowHoldTimer = null; }
+          if (rightArrowHoldActive) { rightArrowHoldActive = false; stopHoldSpeed(); }
+          else seekRelative(state.skipStepSeconds);
+        }
+      });
+
+      renderBookmarks();
+      renderSnapshots();
+      applyVideoTransformsAndFilters();
+      initDemoStream();
+    })();
+  </script>
+</body>
+</html>
